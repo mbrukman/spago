@@ -44,6 +44,18 @@ type Model[T mat.DType, K Key] struct {
 	ZeroEmbedding nn.Param[T] `spago:"type:weights"`
 	// Database where embeddings are stored.
 	Store store.Store
+	// TODO
+	Shared *SharedGrads[T]
+}
+
+func (m *Model[T, _]) TraverseParam(callback nn.ParamsTraversalFunc[T]) {
+	for _, param := range m.Shared.EmbeddingsWithGrad {
+		callback(param, param.Name(), nn.Weights)
+	}
+}
+
+// SharedGrads TODO
+type SharedGrads[T mat.DType] struct {
 	// EmbeddingsWithGrad is filled with all those embedding-parameters that
 	// have a gradient value attached.
 	//
@@ -74,8 +86,8 @@ type Model[T mat.DType, K Key] struct {
 	// The Embedding values stored in EmbeddingsWithGrad don't contain any
 	// gradient value; instead the Model provides private methods allowing
 	// reading and writing gradients by key, which are stored here.
-	grads map[string]mat.Matrix[T]
-	mu    sync.RWMutex
+	Grads map[string]mat.Matrix[T]
+	mx    sync.RWMutex
 }
 
 func init() {
@@ -102,6 +114,7 @@ func New[T mat.DType, K Key](conf Config, repo store.Repository) *Model[T, K] {
 		Config:        conf,
 		ZeroEmbedding: zeroEmb,
 		Store:         &store.PreventStoreMarshaling{Store: st},
+		Shared:        &SharedGrads[T]{},
 	}
 }
 
@@ -124,7 +137,7 @@ func (m *Model[_, _]) Count() int {
 //
 // It panics in case of errors reading from the underlying store.
 func (m *Model[T, K]) Embedding(key K) (nn.Param[T], bool) {
-	if e, ok := m.EmbeddingsWithGrad[stringifyKey(key)]; ok {
+	if e, ok := m.Shared.EmbeddingsWithGrad[stringifyKey(key)]; ok {
 		return e, true
 	}
 
@@ -175,11 +188,11 @@ func (m *Model[T, K]) Encode(keys []K) []ag.Node[T] {
 // ClearEmbeddingsWithGrad empties the memory of visited embeddings with
 // non-null gradient value.
 func (m *Model[_, _]) ClearEmbeddingsWithGrad() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.Shared.mx.Lock()
+	defer m.Shared.mx.Unlock()
 
-	m.grads = nil
-	m.EmbeddingsWithGrad = nil
+	m.Shared.Grads = nil
+	m.Shared.EmbeddingsWithGrad = nil
 }
 
 // UseRepository allows the Model to use a Store from the given Repository.
@@ -217,9 +230,9 @@ func (m *Model[T, K]) getGrad(key K) (grad mat.Matrix[T], exists bool) {
 		return nil, false
 	}
 
-	m.mu.RLock()
-	grad, exists = m.grads[stringifyKey(key)]
-	m.mu.RUnlock()
+	m.Shared.mx.RLock()
+	grad, exists = m.Shared.Grads[stringifyKey(key)]
+	m.Shared.mx.RUnlock()
 	return
 }
 
@@ -229,21 +242,21 @@ func (m *Model[T, K]) accGrad(e *Embedding[T, K], gx mat.Matrix[T]) {
 	}
 	key := stringifyKey(e.key)
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.Shared.mx.Lock()
+	defer m.Shared.mx.Unlock()
 
-	grad, exists := m.grads[key]
+	grad, exists := m.Shared.Grads[key]
 	if exists {
 		grad.AddInPlace(gx)
 		return
 	}
 
-	if m.grads == nil {
-		m.grads = make(map[string]mat.Matrix[T])
-		m.EmbeddingsWithGrad = make(ParamsMap[T])
+	if m.Shared.Grads == nil {
+		m.Shared.Grads = make(map[string]mat.Matrix[T])
+		m.Shared.EmbeddingsWithGrad = make(ParamsMap[T])
 	}
-	m.grads[key] = gx.Clone()
-	m.EmbeddingsWithGrad[key] = e
+	m.Shared.Grads[key] = gx.Clone()
+	m.Shared.EmbeddingsWithGrad[key] = e
 }
 
 func (m *Model[T, K]) zeroGrad(k K) {
@@ -252,15 +265,15 @@ func (m *Model[T, K]) zeroGrad(k K) {
 	}
 	key := stringifyKey(k)
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.Shared.mx.Lock()
+	defer m.Shared.mx.Unlock()
 
-	grad, exists := m.grads[key]
+	grad, exists := m.Shared.Grads[key]
 	if !exists {
 		return
 	}
 
 	mat.ReleaseMatrix(grad)
-	delete(m.grads, key)
-	delete(m.EmbeddingsWithGrad, key)
+	delete(m.Shared.Grads, key)
+	delete(m.Shared.EmbeddingsWithGrad, key)
 }

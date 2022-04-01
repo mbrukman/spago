@@ -7,12 +7,15 @@ package embeddings_test
 import (
 	"bytes"
 	"encoding/gob"
+
 	"errors"
 	"fmt"
+
 	"testing"
 
-	"github.com/nlpodyssey/spago/embeddings"
 	"github.com/nlpodyssey/spago/embeddings/store"
+
+	"github.com/nlpodyssey/spago/embeddings"
 	"github.com/nlpodyssey/spago/embeddings/store/memstore"
 	"github.com/nlpodyssey/spago/mat"
 	"github.com/nlpodyssey/spago/nn"
@@ -169,6 +172,28 @@ func TestModel_Embedding(t *testing.T) {
 
 		e2, _ = m.Embedding("e")
 		assert.NotSame(t, e, e2, "grad has been zeroed: not memoized")
+	})
+
+	t.Run("embeddings with a gradient are shared among sessions", func(t *testing.T) {
+		type T = float32
+
+		repo := memstore.NewRepository()
+		conf := embeddings.Config{
+			Size:      3,
+			StoreName: "test-store",
+			Trainable: true,
+		}
+		m := embeddings.New[T, string](conf, repo)
+
+		e, _ := m.Embedding("e")
+		e.AccGrad(mat.NewVecDense([]T{1, 2, 3}))
+		fmt.Println(m.Shared.EmbeddingsWithGrad)
+		fmt.Println(m.Shared.EmbeddingsWithGrad)
+		e2, _ := m.Embedding("e")
+
+		assert.Equal(t, []T{1, 2, 3}, e2.Grad().Data())
+		assert.Same(t, e, e2, "has grad: memoized")
+
 	})
 }
 
@@ -422,7 +447,7 @@ func TestModel(t *testing.T) {
 
 		require.NotNil(t, m.ZeroEmbedding)
 		require.NotNil(t, m.Store)
-		require.Len(t, m.EmbeddingsWithGrad, 1)
+		require.Len(t, m.Shared.EmbeddingsWithGrad, 1)
 
 		var buf bytes.Buffer
 		require.NoError(t, gob.NewEncoder(&buf).Encode(m))
@@ -439,7 +464,7 @@ func TestModel(t *testing.T) {
 		require.NotNil(t, decoded.Store)
 		assert.Nil(t, decoded.Store.(store.PreventStoreMarshaling).Store)
 
-		require.Nil(t, decoded.EmbeddingsWithGrad)
+		require.Nil(t, decoded.Shared.EmbeddingsWithGrad)
 	})
 }
 
