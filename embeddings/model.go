@@ -48,7 +48,8 @@ type Model[T mat.DType, K Key] struct {
 	Shared *SharedGrads[T]
 }
 
-func (m *Model[T, _]) TraverseParam(callback nn.ParamsTraversalFunc[T]) {
+func (m *Model[T, _]) TraverseParams(callback nn.ParamsTraversalFunc[T]) {
+	fmt.Printf("Model.TraverseParam() - \n")
 	for _, param := range m.Shared.EmbeddingsWithGrad {
 		callback(param, param.Name(), nn.Weights)
 	}
@@ -237,6 +238,7 @@ func (m *Model[T, K]) getGrad(key K) (grad mat.Matrix[T], exists bool) {
 }
 
 func (m *Model[T, K]) accGrad(e *Embedding[T, K], gx mat.Matrix[T]) {
+	fmt.Printf("accGrad: %v\n", gx)
 	if !m.Trainable {
 		return
 	}

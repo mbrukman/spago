@@ -63,6 +63,7 @@ func (e *Embedding[_, _]) RequiresGrad() bool {
 
 // AccGrad satisfies the interfaces nn.Param, ag.Node and ag.GradValue.
 func (e *Embedding[T, _]) AccGrad(gx mat.Matrix[T]) {
+	fmt.Printf("Accgrad called!\n")
 	e.model.accGrad(e, gx)
 }
 
